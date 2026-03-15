@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: pipeline
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d pipeline"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - "/root/.ollama:/root/.ollama"
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    depends_on:
+      minio:
+        condition: service_started
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      MINIO_URL: minio:9000
+      REDIS_URL: redis://redis:6379
+      PG_URL: postgresql://user:pass@postgres:5432/pipeline
+      OLLAMA_URL: http://ollama:11434
+
+  worker:
+    build: .
+    command: celery -A tasks worker --loglevel=info
+    restart: unless-stopped
+    depends_on:
+      minio:
+        condition: service_started
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      MINIO_URL: minio:9000
+      REDIS_URL: redis://redis:6379
+      PG_URL: postgresql://user:pass@postgres:5432/pipeline
+      OLLAMA_URL: http://ollama:11434
+
+  dashboard:
+    build: .
+    command: python -m streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PG_URL: postgresql://user:pass@postgres:5432/pipeline
+
+  clawbot:
+    build: 
+      context: .
+      dockerfile: Dockerfile.clawbot
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      - API_URL=http://api:8000/upload

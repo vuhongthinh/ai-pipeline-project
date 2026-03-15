@@ -1,0 +1,10 @@
+fastapi==0.103.1
+uvicorn==0.23.2
+python-multipart==0.0.6
+celery==5.3.4
+redis==5.0.0
+minio==7.1.16
+psycopg2-binary==2.9.7
+requests==2.31.0
+streamlit
+pandas

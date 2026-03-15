@@ -1,0 +1,12 @@
+# Sử dụng Alpine Linux siêu tối giản
+FROM python:3.10-alpine
+
+WORKDIR /bot
+
+# Cài đặt thư viện requests siêu nhẹ
+RUN pip install --no-cache-dir requests
+
+COPY mini_clawbot.py .
+
+# Chạy bot ở chế độ unbuffered để xem log realtime
+CMD ["python", "-u", "mini_clawbot.py"]
