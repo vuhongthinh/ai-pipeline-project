@@ -6,6 +6,8 @@ from minio import Minio
 from io import BytesIO   
 import uuid 
 from tasks import process_file
+from celery.result import AsyncResult
+from celery import current_app as celery_app
 
 app = FastAPI(title="Multi-modal Ingestion API")
 
@@ -21,15 +23,18 @@ app.add_middleware(
 # Khởi tạo MinIO
 minio_client = Minio(
     os.getenv("MINIO_URL", "minio:9000"),
-    access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-    secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
-    secure=False
+    access_key=os.getenv("MINIO_ROOT_USER", "minioadmin"),
+    secret_key=os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"),
+    secure=False,
 )
+#end point để kiểm tra trạng thái
+@app.get("/health")
+async def health():
+    return {"status": "ok", "minio": minio_client.bucket_exists("uploads")}
 if not minio_client.bucket_exists("uploads"):
     minio_client.make_bucket("uploads")
 
-# ---- ĐÂY LÀ PHẦN BẠN CÒN THIẾU ----
-# Route này giúp hiển thị giao diện Web khi truy cập thẳng vào localhost:8000
+
 @app.get("/")
 async def serve_ui():
     try:
@@ -37,6 +42,21 @@ async def serve_ui():
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
         return HTMLResponse(content="<h1>Thiếu tệp app_interface.html. Hãy kiểm tra lại thư mục!</h1>", status_code=404)
+
+@app.get("/task/{task_id}")
+async def get_task_status(task_id: str):
+    """Trả về trạng thái và kết quả (nếu có)"""
+    async_res = AsyncResult(task_id, app=celery_app)
+    state = async_res.state
+    if state == "PENDING":
+        return {"status": "queued"}
+    elif state == "STARTED":
+        return {"status": "processing"}
+    elif state == "FAILURE":
+        return {"status": "failed", "reason": str(async_res.result)}
+    else:  # SUCCESS
+        return {"status": "finished", "result": async_res.result}
+
 # -----------------------------------
 
 @app.post("/upload")
