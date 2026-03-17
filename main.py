@@ -1,14 +1,24 @@
-# main.py
-from fastapi import FastAPI, UploadFile, File , HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 import os
 from minio import Minio
 from io import BytesIO   
 import uuid 
-from tasks import process_file  # Import Celery task
+from tasks import process_file
 
 app = FastAPI(title="Multi-modal Ingestion API")
 
-# Khởi tạo kết nối tới MinIO
+# Bật CORS để cho phép Giao diện gọi API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Khởi tạo MinIO
 minio_client = Minio(
     os.getenv("MINIO_URL", "minio:9000"),
     access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
@@ -18,27 +28,33 @@ minio_client = Minio(
 if not minio_client.bucket_exists("uploads"):
     minio_client.make_bucket("uploads")
 
+# ---- ĐÂY LÀ PHẦN BẠN CÒN THIẾU ----
+# Route này giúp hiển thị giao diện Web khi truy cập thẳng vào localhost:8000
+@app.get("/")
+async def serve_ui():
+    try:
+        with open("app_interface.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(content="<h1>Thiếu tệp app_interface.html. Hãy kiểm tra lại thư mục!</h1>", status_code=404)
+# -----------------------------------
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    # 1. Tạo ID duy nhất cho tác vụ
     task_id = str(uuid.uuid4())
         
-    # 2. Lưu tệp thô vào MinIO (Object Storage)
     file_id = f"{task_id}.{file.filename.split('.')[-1]}"
     file_content = await file.read()
     MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
     if len(file_content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=413, detail="File too large. Maximum size is 50MB.")
     
-    # Đảm bảo bucket 'uploads' đã tồn tại trước khi put_object (thêm logic thực tế nếu cần)
     minio_client.put_object("uploads", file_id, BytesIO(file_content), len(file_content))
-    file_url = f"http://localhost:9000/uploads/{file_id}"
+    file_url = f"http://minio:9000/uploads/{file_id}"
         
-    # 3. Đẩy tác vụ vào Redis Queue cho Celery Worker (BẤT ĐỒNG BỘ)
-    # Hàm .delay() giúp FastAPI trả về response ngay lập tức mà không chờ AI xử lý
+    # Đẩy vào Celery
     process_file.delay(task_id, file_url, file.content_type)
         
-    # 4. Trả về cho User ngay lập tức (Zero Wait)
     return {
         "status": "accepted",
         "task_id": task_id,
