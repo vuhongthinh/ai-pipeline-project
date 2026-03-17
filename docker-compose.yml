@@ -1,6 +1,9 @@
-version: '3.8'
+version: "3.8"
 
 services:
+  # -----------------------------------------------------------------
+  # MinIO
+  # -----------------------------------------------------------------
   minio:
     image: minio/minio
     ports:
@@ -11,11 +14,17 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
     command: server /data --console-address ":9001"
 
+  # -----------------------------------------------------------------
+  # Redis (message broker + result backend)
+  # -----------------------------------------------------------------
   redis:
     image: redis:alpine
     ports:
       - "6379:6379"
 
+  # -----------------------------------------------------------------
+  # PostgreSQL
+  # -----------------------------------------------------------------
   postgres:
     image: postgres:15
     environment:
@@ -32,70 +41,101 @@ services:
       timeout: 5s
       retries: 5
 
+  # -----------------------------------------------------------------
+  # Ollama (LLM inference)
+  # -----------------------------------------------------------------
   ollama:
     image: ollama/ollama
     ports:
       - "11434:11434"
     volumes:
-      - "/root/.ollama:/root/.ollama"
+      - "./ollama_data:/root/.ollama"
 
+  # -----------------------------------------------------------------
+  # Whisper service (audio → text)
+  # -----------------------------------------------------------------
+  whisper:
+    build:
+      context: .
+      dockerfile: Dockerfile.whisper
+    container_name: whisper
+    ports:
+      - "8888:8888"
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
+
+  # -----------------------------------------------------------------
+  # FastAPI (API gateway) – dùng Dockerfile chung
+  # -----------------------------------------------------------------
   api:
     build: .
+    container_name: api
     ports:
       - "8000:8000"
-    restart: unless-stopped
-    depends_on:
-      minio:
-        condition: service_started
-      redis:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-      ollama:
-        condition: service_started
     environment:
       MINIO_URL: minio:9000
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
       REDIS_URL: redis://redis:6379
       PG_URL: postgresql://user:pass@postgres:5432/pipeline
       OLLAMA_URL: http://ollama:11434
+    depends_on:
+      - minio
+      - redis
+      - postgres
+      - ollama
+      - whisper
+    restart: unless-stopped
 
+  # -----------------------------------------------------------------
+  # Celery worker
+  # -----------------------------------------------------------------
   worker:
     build: .
+    container_name: worker
     command: celery -A tasks worker --loglevel=info
-    restart: unless-stopped
-    depends_on:
-      minio:
-        condition: service_started
-      redis:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-      ollama:
-        condition: service_started
     environment:
       MINIO_URL: minio:9000
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
       REDIS_URL: redis://redis:6379
       PG_URL: postgresql://user:pass@postgres:5432/pipeline
       OLLAMA_URL: http://ollama:11434
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - minio
+      - redis
+      - postgres
+      - ollama
+      - whisper
+    restart: unless-stopped
 
+  # -----------------------------------------------------------------
+  # Streamlit dashboard
+  # -----------------------------------------------------------------
   dashboard:
     build: .
+    container_name: dashboard
     command: python -m streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
-    restart: unless-stopped
     ports:
       - "8501:8501"
     depends_on:
-      postgres:
-        condition: service_healthy
+      - postgres
     environment:
       PG_URL: postgresql://user:pass@postgres:5432/pipeline
-
-  clawbot:
-    build: 
-      context: .
-      dockerfile: Dockerfile.clawbot
     restart: unless-stopped
+
+  # -----------------------------------------------------------------
+  # Mini‑Clawbot (đơn giản, chỉ push text file)
+  # -----------------------------------------------------------------
+  clawbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.clawbot   # (có trong repo, không thay đổi)
+    container_name: clawbot
     depends_on:
       - api
     environment:
       - API_URL=http://api:8000/upload
+    restart: unless-stopped

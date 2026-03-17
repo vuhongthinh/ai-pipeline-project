@@ -1,0 +1,17 @@
+# Dockerfile.whisper
+FROM python:3.11-slim
+
+# Cài ffmpeg (Yêu cầu cho Whisper)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y openai-whisper && pip install "openai-whisper[ffmpeg]"  # đảm bảo ffmpeg hỗ trợ
+
+COPY whisper_service.py /app/
+
+EXPOSE 8888
+CMD ["uvicorn", "whisper_service:app", "--host", "0.0.0.0", "--port", "8888"]
