@@ -188,5 +188,74 @@
             }
         });
     </script>
+    <script>
+    // -----------------------------------------------------------------
+    // Hàm poll task cho đến khi status = finished
+    // -----------------------------------------------------------------
+    async function pollTask(taskId){
+        const pollInterval = 3000; // ms
+        const poll = setInterval(async ()=>{
+            try{
+                const r = await fetch(`http://localhost:8000/task/${taskId}`);
+                if (!r.ok) return;
+                const data = await r.json();
+                if (data.status === "finished"){
+                    clearInterval(poll);
+                    // Hiển thị nhãn ngắn
+                    const lbl = document.createElement('div');
+                    lbl.className = 'bg-gray-800 p-3 rounded-md text-2xl text-cyan-300 mt-4';
+                    lbl.textContent = `🪄 Nhãn: ${data.result.short_label}`;
+                    resultBox.appendChild(lbl);
+                }
+                // Nếu failed, báo lỗi
+                if (data.status === "failed"){
+                    clearInterval(poll);
+                    alert("Task thất bại: " + (data.reason||''));
+                }
+            }catch(e){
+                console.error(e);
+            }
+        }, pollInterval);
+    }
+
+    // -----------------------------------------------------------------
+    // Đổi hàm submit để gọi pollTask
+    // -----------------------------------------------------------------
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const file = fileInput.files[0];
+        if (!file) { alert("Vui lòng chọn tệp"); return; }
+
+        // UI loading …
+        submitBtn.disabled = true;
+        btnText.textContent = "Đang gửi…";
+        btnSpinner.classList.remove('hidden');
+        resultBox.classList.add('hidden');
+
+        const fd = new FormData();
+        fd.append('file', file);
+        try{
+            const resp = await fetch('http://localhost:8000/upload', {
+                method: 'POST',
+                body: fd
+            });
+            const json = await resp.json();
+            document.getElementById('resTaskId').textContent = json.task_id;
+            document.getElementById('resFileUrl').textContent = json.file_url;
+            resultBox.classList.remove('hidden');
+
+            // **Bắt đầu polling**
+            pollTask(json.task_id);
+        }catch(err){
+            alert("Lỗi kết nối API");
+            console.error(err);
+        }finally{
+            submitBtn.disabled = false;
+            btnText.textContent = "Đẩy vào Pipeline (Async)";
+            btnSpinner.classList.add('hidden');
+        }
+    });
+</script>
+
 </body>
 </html>
